@@ -11,6 +11,7 @@ import org.junit.rules.Timeout;
 
 import java.io.File;
 import java.io.IOException;
+import java.util.Collections;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
@@ -21,17 +22,18 @@ import static org.junit.Assert.assertEquals;
  * @author Vadim Tsesko <mail@incubos.org>
  */
 public class SingleNodeTest extends TestBase {
-    private static int port;
     private static File data;
+    private static String endpoint;
     private static KVService storage;
     @Rule
     public final Timeout globalTimeout = Timeout.seconds(3);
 
     @BeforeClass
     public static void beforeAll() throws IOException, InterruptedException {
-        port = randomPort();
+        final int port = randomPort();
         data = Files.createTempDirectory();
-        storage = KVServiceFactory.create(port, data);
+        endpoint = endpoint(port);
+        storage = KVServiceFactory.create(port, data, Collections.singleton(endpoint));
         storage.start();
     }
 
@@ -43,7 +45,7 @@ public class SingleNodeTest extends TestBase {
 
     @NotNull
     private String url(@NotNull final String id) {
-        return "http://localhost:" + port + "/v0/entity?id=" + id;
+        return endpoint + "/v0/entity?id=" + id;
     }
 
     private HttpResponse get(@NotNull final String key) throws IOException {
@@ -165,6 +167,32 @@ public class SingleNodeTest extends TestBase {
         final HttpResponse response = get(key);
         assertEquals(200, response.getStatusLine().getStatusCode());
         assertArrayEquals(value2, payloadOf(response));
+    }
+
+    @Test
+    public void respectFileFolder() throws Exception {
+        final String key = randomKey();
+        final byte[] value = randomValue();
+
+        // Insert value
+        assertEquals(201, upsert(key, value).getStatusLine().getStatusCode());
+
+        // Check value
+        final HttpResponse response = get(key);
+        assertEquals(200, response.getStatusLine().getStatusCode());
+        assertArrayEquals(value, payloadOf(response));
+
+        // Remove data and recreate
+        storage.stop();
+        Files.recursiveDelete(data);
+        final int port = randomPort();
+        java.nio.file.Files.createDirectory(data.toPath());
+        endpoint = endpoint(port);
+        storage = KVServiceFactory.create(port, data, Collections.singleton(endpoint));
+        storage.start();
+
+        // Check absent data
+        assertEquals(404, get(key).getStatusLine().getStatusCode());
     }
 
     @Test

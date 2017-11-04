@@ -6,19 +6,23 @@ package ru.mail.polis;
  * The following HTTP protocol is supported:
  * <ul>
  * <li>{@code GET /v0/status} -- returns {@code 200} or {@code 503}</li>
- * <li>{@code GET /v0/entity?id=<ID>} -- get data by {@code ID}. Returns {@code 200} and data if found, {@code 404} if not found.</li>
- * <li>{@code PUT /v0/entity?id=<ID>} -- upsert (create or replace) data by {@code ID}. Returns {@code 201}.</li>
- * <li>{@code DELETE /v0/entity?id=<ID>} -- remove data by {@code ID}. Returns {@code 202}.</li>
+ * <li>{@code GET /v0/entity?id=<ID>[&replicas=<RF>]} -- get data by {@code ID}. Returns {@code 200} and data if found, {@code 404} if not found or {@code 504} if RF not reached.</li>
+ * <li>{@code PUT /v0/entity?id=<ID>[&replicas=<RF>]} -- upsert (create or replace) data by {@code ID}. Returns {@code 201} or {@code 504} if RF not reached.</li>
+ * <li>{@code DELETE /v0/entity?id=<ID>[&replicas=<RF>]} -- remove data by {@code ID}. Returns {@code 202} or {@code 504} if RF not reached.</li>
  * </ul>
  * <p>
  * {@code ID} is a non empty char sequence.
+ * {@code RF} is an optional number of replicas (replica factor) to get ACKs from to return success. Default value is <b>quorum</b>.
  * <p>
  * In all the cases the storage may return:
  * <ul>
  * <li>{@code 4xx} for malformed requests</li>
  * <li>{@code 5xx} for internal errors</li>
  * </ul>
+ * <p>
+ * A cluster of nodes <b>MUST</b> distribute data between nodes and provide consistent results while a quorum of nodes is alive.
  *
+ * @link https://github.com/polis-mail-ru/2017-highload-kv/blob/master/README.md
  * @author Vadim Tsesko <mail@incubos.org>
  */
 public interface KVService {
