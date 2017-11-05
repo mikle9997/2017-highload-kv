@@ -48,7 +48,6 @@ final class KVServiceFactory {
         if (!data.isDirectory()) {
             throw new IllegalArgumentException("Path is not a directory: " + data);
         }
-
-        return new MyService(port, new MyFileDAO(data));
+        return new MyService(port, topology, new MyFileDAO(data));
     }
 }
