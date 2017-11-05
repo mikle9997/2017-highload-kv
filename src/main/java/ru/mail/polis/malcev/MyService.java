@@ -4,7 +4,9 @@ import com.sun.net.httpserver.HttpServer;
 import org.jetbrains.annotations.NotNull;
 import ru.mail.polis.KVService;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.InetSocketAddress;
 import java.util.NoSuchElementException;
 
@@ -17,6 +19,8 @@ public class MyService implements KVService {
     private final MyDAO dao;
 
     private static final String PREFIX = "id=";
+
+    private static final int SIZE_OF_BUFFER = 1024;
 
     public MyService(int port, MyDAO dao) throws IOException {
         this.server = HttpServer.create(new InetSocketAddress(port),0);
@@ -32,7 +36,7 @@ public class MyService implements KVService {
         this.server.createContext("/v0/entity", http -> {
             final String id = extractId(http.getRequestURI().getQuery());
 
-            if (id.equals("")) {
+            if ("".equals(id)) {
                 http.sendResponseHeaders(400,0);
                 http.close();
                 return;
@@ -55,16 +59,19 @@ public class MyService implements KVService {
                     break;
 
                 case "PUT" :
-                    final int contentLength = Integer.valueOf(http.getRequestHeaders().getFirst("Content-Length"));
-                    final byte[] putValue = new byte[contentLength];
-
-                    int read = http.getRequestBody().read(putValue);
-
-                    dao.upsert(id,putValue);
+                    InputStream requestStream = http.getRequestBody();
+                    byte[] buffer = new byte[SIZE_OF_BUFFER];
+                    try (ByteArrayOutputStream baos = new ByteArrayOutputStream()){
+                        while (requestStream.read(buffer) != -1) {
+                            baos.write(buffer);
+                        }
+                        dao.upsert(id,baos.toByteArray());
+                    }
                     http.sendResponseHeaders(201, 0);
                     break;
                 default:
                     http.sendResponseHeaders(405,0);
+                    break;
             }
             http.close();
         });
