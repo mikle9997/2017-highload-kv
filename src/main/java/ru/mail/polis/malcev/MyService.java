@@ -11,7 +11,6 @@ import java.net.InetSocketAddress;
 import java.util.HashSet;
 import java.util.NoSuchElementException;
 import java.util.Set;
-import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public class MyService implements KVService {
@@ -132,8 +131,12 @@ public class MyService implements KVService {
                     try (ByteArrayOutputStream baos = new ByteArrayOutputStream()){
                         while (requestStream.read(buffer) != -1) {
                             baos.write(buffer);
+
+                            for (int i = 0; i < buffer.length; i++) {
+                                buffer[i] = 0;
+                            }
                         }
-                        dao.upsert(id,baos.toByteArray());
+                        dao.upsert(id,trimArray(baos.toByteArray()));
                     }
                     http.sendResponseHeaders(201, 0);
                     break;
@@ -146,8 +149,24 @@ public class MyService implements KVService {
     }
 
     @NotNull
+    private static byte[] trimArray(byte[] inputArray) {
+        if (inputArray.length == 0) {
+            return inputArray;
+        }
+        int i;
+        for(i = inputArray.length - 1;  inputArray[i] == 0 && i >= 0; i--) {
+            //nothing
+        }
+        byte[] outputArray = new byte[i + 1];
+        for (int j = 0; j < outputArray.length; j++) {
+            outputArray[j] = inputArray[j];
+        }
+        return outputArray;
+    }
+
+    @NotNull
     private static Replicas extractReplicas(@NotNull final String query) {
-        if (!query.contains("&replicas"))
+        if (!query.contains(REPLICAS_PREFIX))
             return new Replicas(false);
 
         if(!Pattern.matches("^(.)*" + REPLICAS_PREFIX + "([0-9])*" + SLASH + "([0-9])*$", query)) {
@@ -163,7 +182,11 @@ public class MyService implements KVService {
         if(!query.startsWith(ID_PREFIX)) {
             throw new IllegalArgumentException("Wrong id");
         }
-        return query.substring(ID_PREFIX.length(), query.indexOf(REPLICAS_PREFIX));
+        int indexOfLastIDSymbol = query.length();
+        if (query.contains(REPLICAS_PREFIX)) {
+            indexOfLastIDSymbol = query.indexOf(REPLICAS_PREFIX);
+        }
+        return query.substring(ID_PREFIX.length(), indexOfLastIDSymbol);
     }
 
     @Override
