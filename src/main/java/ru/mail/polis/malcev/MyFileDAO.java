@@ -21,18 +21,35 @@ public class MyFileDAO implements MyDAO {
     @Override
     public byte[] get(@NotNull final String key) throws NoSuchElementException, IllegalArgumentException, IOException {
         final File file = getFile(key);
+
         if(!file.exists()) {
             throw new NoSuchElementException("Invalid key: " + key);
         }
+
         final int fileLength = (int) file.length();
         final byte[] value = new byte[fileLength];
-        if (fileLength == 0)
-            return value;
 
-        try (BufferedInputStream f = new BufferedInputStream(new FileInputStream( file ) )) {
-            while ((f.read(value)) != -1);
+        if (fileLength == 0) {
+            return value;
         }
-        return value;
+
+        try (BufferedInputStream f = new BufferedInputStream(new FileInputStream(file))) {
+            if(f.available() == fileLength) {
+                f.read(value);
+                return value;
+
+            } else {
+                try (ByteArrayOutputStream baos = new ByteArrayOutputStream()){
+                    while ((f.read(value)) != -1) {
+                        baos.write(value);
+                        for (int i = 0; i < value.length; i++) {
+                            value[i] = 0;
+                        }
+                    }
+                    return ByteArrayProcessing.trimArray(baos.toByteArray());
+                }
+            }
+        }
     }
 
     @Override

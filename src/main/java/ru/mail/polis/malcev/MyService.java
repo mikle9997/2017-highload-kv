@@ -4,14 +4,16 @@ import com.sun.net.httpserver.HttpServer;
 import org.jetbrains.annotations.NotNull;
 import ru.mail.polis.KVService;
 
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.io.InputStream;
+import java.io.*;
+import java.net.HttpURLConnection;
 import java.net.InetSocketAddress;
+import java.net.URL;
 import java.util.HashSet;
 import java.util.NoSuchElementException;
 import java.util.Set;
+import java.util.function.Predicate;
 import java.util.regex.Pattern;
+
 
 public class MyService implements KVService {
 
@@ -76,17 +78,10 @@ public class MyService implements KVService {
         createContextStatus();
         createContextEntity();
 
-        this.topology = detectOtherNodes(entireTopology, port);
-    }
+        this.topology = new HashSet<>(entireTopology);
 
-    @NotNull
-    private static Set<String> detectOtherNodes(@NotNull final Set<String> topology, final int myPort) {
-        Set<String> setOfOtherPorts = new HashSet<>();
-        for (String port: topology) {
-            if (!port.contains(Integer.toString(myPort)))
-                setOfOtherPorts.add(port);
-        }
-        return setOfOtherPorts;
+        Predicate<String> stringPredicate = p-> p.contains(Integer.toString(port));
+        this.topology.removeIf(stringPredicate);
     }
 
     private void createContextStatus() {
@@ -115,6 +110,7 @@ public class MyService implements KVService {
                         final byte[] getValue = dao.get(id);
                         http.sendResponseHeaders(200, getValue.length);
                         http.getResponseBody().write(getValue);
+
                     } catch (NoSuchElementException | IOException e) {
                         http.sendResponseHeaders(404,0);
                     }
@@ -131,15 +127,15 @@ public class MyService implements KVService {
                     try (ByteArrayOutputStream baos = new ByteArrayOutputStream()){
                         while (requestStream.read(buffer) != -1) {
                             baos.write(buffer);
-
                             for (int i = 0; i < buffer.length; i++) {
                                 buffer[i] = 0;
                             }
                         }
-                        dao.upsert(id,trimArray(baos.toByteArray()));
+                        dao.upsert(id,ByteArrayProcessing.trimArray(baos.toByteArray()));
                     }
                     http.sendResponseHeaders(201, 0);
                     break;
+
                 default:
                     http.sendResponseHeaders(405,0);
                     break;
@@ -148,33 +144,60 @@ public class MyService implements KVService {
         });
     }
 
-    @NotNull
-    private static byte[] trimArray(byte[] inputArray) {
-        if (inputArray.length == 0) {
-            return inputArray;
+    //TODO work is underway
+    private byte[] sendRequest() {
+        String params = "id=20b5d2c5d842e3a&replicas=2/2";
+        byte[] data = null;
+        InputStream is = null;
+
+        try {
+
+            URL url = new URL(topology.iterator().next() + "/v0/entity" + params);
+            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+            conn.setRequestMethod("POST");
+            conn.setDoOutput(true);
+            conn.setDoInput(true);
+
+            conn.connect();
+            int responseCode= conn.getResponseCode();
+
+            System.out.println(123123123);
+
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            is = conn.getInputStream();
+            byte[] buffer = new byte[8192]; // Такого вот размера буфер
+            // Далее, например, вот так читаем ответ
+            int bytesRead;
+            while ((bytesRead = is.read(buffer)) != -1) {
+                baos.write(buffer, 0, bytesRead);
+            }
+            data = baos.toByteArray();
+
+        } catch (Exception e) {
+            System.out.println("Test:  " + e.toString());
+        } finally {
+            try {
+                if (is != null)
+                    is.close();
+            } catch (Exception ex) {}
         }
-        int i;
-        for(i = inputArray.length - 1;  inputArray[i] == 0 && i >= 0; i--) {
-            //nothing
-        }
-        byte[] outputArray = new byte[i + 1];
-        for (int j = 0; j < outputArray.length; j++) {
-            outputArray[j] = inputArray[j];
-        }
-        return outputArray;
+        return data;
     }
 
     @NotNull
     private static Replicas extractReplicas(@NotNull final String query) {
-        if (!query.contains(REPLICAS_PREFIX))
+        if (!query.contains(REPLICAS_PREFIX)) {
             return new Replicas(false);
+        }
 
         if(!Pattern.matches("^(.)*" + REPLICAS_PREFIX + "([0-9])*" + SLASH + "([0-9])*$", query)) {
             throw new IllegalArgumentException("Wrong replicas");
         }
-        String polka[] = query.substring(
+
+        String partsOfReplicas[] = query.substring(
                 query.indexOf(REPLICAS_PREFIX) + REPLICAS_PREFIX.length()).split(SLASH);
-        return new Replicas(Integer.valueOf(polka[0]),Integer.valueOf(polka[1]));
+
+        return new Replicas(Integer.valueOf(partsOfReplicas[0]),Integer.valueOf(partsOfReplicas[1]));
     }
 
     @NotNull
@@ -182,10 +205,13 @@ public class MyService implements KVService {
         if(!query.startsWith(ID_PREFIX)) {
             throw new IllegalArgumentException("Wrong id");
         }
+
         int indexOfLastIDSymbol = query.length();
+
         if (query.contains(REPLICAS_PREFIX)) {
             indexOfLastIDSymbol = query.indexOf(REPLICAS_PREFIX);
         }
+
         return query.substring(ID_PREFIX.length(), indexOfLastIDSymbol);
     }
 
