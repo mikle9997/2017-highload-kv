@@ -25,13 +25,13 @@ public class MyService implements KVService {
 
     private final Set<String> topology;
 
+    private static final int SIZE_OF_BUFFER = 1024;
+
     private static final String ID_PREFIX = "id=";
 
     private static final String REPLICAS_PREFIX = "&replicas=";
 
     private static final String SLASH = "/";
-
-    private static final int SIZE_OF_BUFFER = 1024;
 
     private static class  Replicas {
 
@@ -77,11 +77,14 @@ public class MyService implements KVService {
 
         createContextStatus();
         createContextEntity();
+        createContextInner();
 
         this.topology = new HashSet<>(entireTopology);
 
         Predicate<String> stringPredicate = p-> p.contains(Integer.toString(port));
         this.topology.removeIf(stringPredicate);
+
+        sendRequest();
     }
 
     private void createContextStatus() {
@@ -98,7 +101,7 @@ public class MyService implements KVService {
             final String id = extractId(http.getRequestURI().getQuery());
             final Replicas replicas = extractReplicas(http.getRequestURI().getQuery());
 
-            if ("".equals(id)) {
+            if ("".equals(id) || replicas.isExist() && replicas.getAck() > replicas.getFrom()) {
                 http.sendResponseHeaders(400,0);
                 http.close();
                 return;
@@ -125,8 +128,9 @@ public class MyService implements KVService {
                     InputStream requestStream = http.getRequestBody();
                     byte[] buffer = new byte[SIZE_OF_BUFFER];
                     try (ByteArrayOutputStream baos = new ByteArrayOutputStream()){
-                        for (int j = requestStream.read(buffer); j != -1; j = requestStream.read(buffer)){
-                            baos.write(buffer,0, j);
+                        int numberOfBytesRead;
+                        while ((numberOfBytesRead = requestStream.read(buffer)) != -1) {
+                            baos.write(buffer,0, numberOfBytesRead);
                         }
                         baos.flush();
                         dao.upsert(id, baos.toByteArray());
@@ -142,37 +146,70 @@ public class MyService implements KVService {
         });
     }
 
-    //TODO work is underway
+    private void createContextInner() {
+        this.server.createContext("/v0/inner", http -> {
+            final String id = extractId(http.getRequestURI().getQuery());
+            final Replicas replicas = extractReplicas(http.getRequestURI().getQuery());
+
+            if ("".equals(id) || replicas.isExist() && replicas.getAck() > replicas.getFrom()) {
+                http.sendResponseHeaders(400,0);
+                http.close();
+                return;
+            }
+
+            switch (http.getRequestMethod()){
+                case "GET" :
+                    System.out.println("GET");
+
+                    break;
+
+                case "DELETE" :
+                    System.out.println("DELETE");
+
+                    break;
+
+                case "PUT" :
+                    System.out.println("PUT");
+
+                    break;
+
+                default:
+                    http.sendResponseHeaders(405,0);
+                    break;
+            }
+            http.close();
+        });
+    }
+
     private byte[] sendRequest() {
-        String params = "id=20b5d2c5d842e3a&replicas=2/2";
+        String params = "/v0/inner?id=20b5d2c5d842e3a&replicas=2/2";
         byte[] data = null;
         InputStream is = null;
 
         try {
-
-            URL url = new URL(topology.iterator().next() + "/v0/entity" + params);
+            URL url = new URL(topology.iterator().next() + params);
             HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-            conn.setRequestMethod("POST");
+
+            conn.setRequestMethod("PUT");
             conn.setDoOutput(true);
             conn.setDoInput(true);
 
             conn.connect();
             int responseCode= conn.getResponseCode();
 
-            System.out.println(123123123);
 
             ByteArrayOutputStream baos = new ByteArrayOutputStream();
             is = conn.getInputStream();
-            byte[] buffer = new byte[8192]; // Такого вот размера буфер
-            // Далее, например, вот так читаем ответ
-            int bytesRead;
-            while ((bytesRead = is.read(buffer)) != -1) {
-                baos.write(buffer, 0, bytesRead);
-            }
+//            byte[] buffer = new byte[SIZE_OF_BUFFER];
+            //  Далее, например, вот так читаем ответ
+//            int bytesRead;
+//            while ((bytesRead = is.read(buffer)) != -1) {
+//                baos.write(buffer, 0, bytesRead);
+//            }
             data = baos.toByteArray();
 
         } catch (Exception e) {
-            System.out.println("Test:  " + e.toString());
+            System.out.println("sendRequest:  " + e.toString());
         } finally {
             try {
                 if (is != null)
