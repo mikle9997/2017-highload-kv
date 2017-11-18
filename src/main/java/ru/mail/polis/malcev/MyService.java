@@ -125,13 +125,11 @@ public class MyService implements KVService {
                     InputStream requestStream = http.getRequestBody();
                     byte[] buffer = new byte[SIZE_OF_BUFFER];
                     try (ByteArrayOutputStream baos = new ByteArrayOutputStream()){
-                        while (requestStream.read(buffer) != -1) {
-                            baos.write(buffer);
-                            for (int i = 0; i < buffer.length; i++) {
-                                buffer[i] = 0;
-                            }
+                        for (int j = requestStream.read(buffer); j != -1; j = requestStream.read(buffer)){
+                            baos.write(buffer,0, j);
                         }
-                        dao.upsert(id,ByteArrayProcessing.trimArray(baos.toByteArray()));
+                        baos.flush();
+                        dao.upsert(id, baos.toByteArray());
                     }
                     http.sendResponseHeaders(201, 0);
                     break;

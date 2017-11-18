@@ -40,13 +40,11 @@ public class MyFileDAO implements MyDAO {
 
             } else {
                 try (ByteArrayOutputStream baos = new ByteArrayOutputStream()){
-                    while ((f.read(value)) != -1) {
-                        baos.write(value);
-                        for (int i = 0; i < value.length; i++) {
-                            value[i] = 0;
-                        }
+                    for (int j = f.read(value); j != -1; j = f.read(value)){
+                        baos.write(value,0, j);
                     }
-                    return ByteArrayProcessing.trimArray(baos.toByteArray());
+                    baos.flush();
+                    return baos.toByteArray();
                 }
             }
         }
