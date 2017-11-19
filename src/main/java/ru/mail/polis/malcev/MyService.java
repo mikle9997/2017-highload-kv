@@ -140,23 +140,24 @@ public class MyService implements KVService {
                         Iterator<String> iterator = topology.iterator();
                         InnerRequestAnswer ira = new InnerRequestAnswer(504, new byte[0]);
                         List<InnerRequestAnswer> listIRA = new ArrayList<>();
-                        int responseCode = 504;
+                        int responseCode = 0;
 
                         switch (http.getRequestMethod()){
                             case GET_REQUEST :
                                 System.out.println(GET_REQUEST);
-                                for (int i = 0; i < topology.size() && i < replicas.getAck(); i++) {
-                                    ira = sendInnerRequest(id, iterator.next(), GET_REQUEST, null);
-                                    listIRA.add(ira);
-                                }
-                                for (InnerRequestAnswer element : listIRA) { // всё хорошо 200, не нашёл 404, не дойти до сервера 504
-                                    if (element.getResponseCode() == 200)
-                                        responseCode = 200;
-                                    if (element.getResponseCode() == 504 && responseCode != 200) {
-                                        responseCode = 504;
-                                    }
-                                }
-
+                                ira = sendInnerRequest(id, iterator.next(), GET_REQUEST, null);
+//                                for (int i = 0; i < topology.size() && i < replicas.getAck(); i++) {
+//                                    ira = sendInnerRequest(id, iterator.next(), GET_REQUEST, null);
+//                                    listIRA.add(ira);
+//                                }
+//                                for (InnerRequestAnswer element : listIRA) { // всё хорошо 200, не нашёл 404, не дойти до сервера 504
+//                                    if (element.getResponseCode() == 200)
+//                                        responseCode = 200;
+//                                    if (element.getResponseCode() == 504 && responseCode != 200) {
+//                                        responseCode = 504;
+//                                    }
+//                                }
+                                responseCode = ira.responseCode;
                                 http.sendResponseHeaders(responseCode, 0);
                                 http.getResponseBody().write(ira.getOutputData());
                                 break;
