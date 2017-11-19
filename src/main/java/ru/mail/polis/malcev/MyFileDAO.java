@@ -39,14 +39,7 @@ public class MyFileDAO implements MyDAO {
                 return value;
 
             } else {
-                try (ByteArrayOutputStream baos = new ByteArrayOutputStream()){
-                    int numberOfBytesRead;
-                    while ((numberOfBytesRead = f.read(value)) != -1) {
-                        baos.write(value,0, numberOfBytesRead);
-                    }
-                    baos.flush();
-                    return baos.toByteArray();
-                }
+                return StreamReader.readDataFromStream(f);
             }
         }
     }

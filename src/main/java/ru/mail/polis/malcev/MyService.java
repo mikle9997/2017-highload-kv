@@ -1,17 +1,18 @@
 package ru.mail.polis.malcev;
 
+import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 import ru.mail.polis.KVService;
 
 import java.io.*;
 import java.net.HttpURLConnection;
 import java.net.InetSocketAddress;
 import java.net.URL;
-import java.util.HashSet;
-import java.util.NoSuchElementException;
-import java.util.Set;
-import java.util.function.Predicate;
+import java.util.*;
+import java.util.concurrent.Executor;
+import java.util.concurrent.Executors;
 import java.util.regex.Pattern;
 
 
@@ -23,29 +24,28 @@ public class MyService implements KVService {
     @NotNull
     private final MyDAO dao;
 
+    @NotNull
     private final Set<String> topology;
 
-    private static final int SIZE_OF_BUFFER = 1024;
-
     private static final String ID_PREFIX = "id=";
-
     private static final String REPLICAS_PREFIX = "&replicas=";
-
     private static final String SLASH = "/";
 
-    private static class  Replicas {
+    private static final String GET_REQUEST = "GET";
+    private static final String DELETE_REQUEST = "DELETE";
+    private static final String PUT_REQUEST = "PUT";
 
-        private int ack = 0;
+    private final Executor executorOfStatus = Executors.newCachedThreadPool();
+    private final Executor executorOfEntity = Executors.newCachedThreadPool();
+    private final Executor executorOfInner = Executors.newSingleThreadExecutor();
 
-        private int from = 0;
+    private class Replicas {
 
-        private boolean exist = true;
+        private final int ack;
 
-        public Replicas(boolean exist) {
-            this.exist = exist;
-        }
+        private final int from;
 
-        public Replicas(int ack, int from) {
+        public Replicas(final int ack, final int from) {
             this.ack = ack;
             this.from = from;
         }
@@ -58,177 +58,257 @@ public class MyService implements KVService {
             return from;
         }
 
-        public boolean isExist() {
-            return exist;
+        @Override
+        public String toString() {
+            return ack + " " + from;
+        }
+    }
+
+    private class InnerRequestAnswer {
+
+        private final int responseCode;
+        private final byte[] outputData;
+
+        public InnerRequestAnswer(final int responseCode, @NotNull final byte[] outputData) {
+            this.responseCode = responseCode;
+            this.outputData = outputData;
+        }
+
+        public int getResponseCode() {
+            return responseCode;
+        }
+
+        @NotNull
+        public byte[] getOutputData() {
+            return outputData;
         }
 
         @Override
         public String toString() {
-            if (exist)
-                return ack + " " + from;
-            else
-                return "false";
+            return Integer.toString(responseCode);
         }
     }
 
-    public MyService(final int port, @NotNull final Set<String> entireTopology, MyDAO dao) throws IOException {
+    public MyService(final int port, @NotNull final Set<String> entireTopology,@NotNull MyDAO dao) throws IOException {
         this.server = HttpServer.create(new InetSocketAddress(port),0);
         this.dao = dao;
+        this.topology = sortSet(entireTopology);
 
         createContextStatus();
         createContextEntity();
         createContextInner();
-
-        this.topology = new HashSet<>(entireTopology);
-
-        Predicate<String> stringPredicate = p-> p.contains(Integer.toString(port));
-        this.topology.removeIf(stringPredicate);
-
-        sendRequest();
-    }
-
-    private void createContextStatus() {
-        this.server.createContext("/v0/status", http -> {
-            final String response = "ONLINE";
-            http.sendResponseHeaders(200, response.length());
-            http.getResponseBody().write(response.getBytes());
-            http.close();
-        });
-    }
-
-    private void createContextEntity(){
-        this.server.createContext("/v0/entity", http -> {
-            final String id = extractId(http.getRequestURI().getQuery());
-            final Replicas replicas = extractReplicas(http.getRequestURI().getQuery());
-
-            if ("".equals(id) || replicas.isExist() && replicas.getAck() > replicas.getFrom()) {
-                http.sendResponseHeaders(400,0);
-                http.close();
-                return;
-            }
-
-            switch (http.getRequestMethod()){
-                case "GET" :
-                    try {
-                        final byte[] getValue = dao.get(id);
-                        http.sendResponseHeaders(200, getValue.length);
-                        http.getResponseBody().write(getValue);
-
-                    } catch (NoSuchElementException | IOException e) {
-                        http.sendResponseHeaders(404,0);
-                    }
-                    break;
-
-                case "DELETE" :
-                    dao.delete(id);
-                    http.sendResponseHeaders(202, 0);
-                    break;
-
-                case "PUT" :
-                    InputStream requestStream = http.getRequestBody();
-                    byte[] buffer = new byte[SIZE_OF_BUFFER];
-                    try (ByteArrayOutputStream baos = new ByteArrayOutputStream()){
-                        int numberOfBytesRead;
-                        while ((numberOfBytesRead = requestStream.read(buffer)) != -1) {
-                            baos.write(buffer,0, numberOfBytesRead);
-                        }
-                        baos.flush();
-                        dao.upsert(id, baos.toByteArray());
-                    }
-                    http.sendResponseHeaders(201, 0);
-                    break;
-
-                default:
-                    http.sendResponseHeaders(405,0);
-                    break;
-            }
-            http.close();
-        });
-    }
-
-    private void createContextInner() {
-        this.server.createContext("/v0/inner", http -> {
-            final String id = extractId(http.getRequestURI().getQuery());
-            final Replicas replicas = extractReplicas(http.getRequestURI().getQuery());
-
-            if ("".equals(id) || replicas.isExist() && replicas.getAck() > replicas.getFrom()) {
-                http.sendResponseHeaders(400,0);
-                http.close();
-                return;
-            }
-
-            switch (http.getRequestMethod()){
-                case "GET" :
-                    System.out.println("GET");
-
-                    break;
-
-                case "DELETE" :
-                    System.out.println("DELETE");
-
-                    break;
-
-                case "PUT" :
-                    System.out.println("PUT");
-
-                    break;
-
-                default:
-                    http.sendResponseHeaders(405,0);
-                    break;
-            }
-            http.close();
-        });
-    }
-
-    private byte[] sendRequest() {
-        String params = "/v0/inner?id=20b5d2c5d842e3a&replicas=2/2";
-        byte[] data = null;
-        InputStream is = null;
-
-        try {
-            URL url = new URL(topology.iterator().next() + params);
-            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-
-            conn.setRequestMethod("PUT");
-            conn.setDoOutput(true);
-            conn.setDoInput(true);
-
-            conn.connect();
-            int responseCode= conn.getResponseCode();
-
-
-            ByteArrayOutputStream baos = new ByteArrayOutputStream();
-            is = conn.getInputStream();
-//            byte[] buffer = new byte[SIZE_OF_BUFFER];
-            //  Далее, например, вот так читаем ответ
-//            int bytesRead;
-//            while ((bytesRead = is.read(buffer)) != -1) {
-//                baos.write(buffer, 0, bytesRead);
-//            }
-            data = baos.toByteArray();
-
-        } catch (Exception e) {
-            System.out.println("sendRequest:  " + e.toString());
-        } finally {
-            try {
-                if (is != null)
-                    is.close();
-            } catch (Exception ex) {}
-        }
-        return data;
     }
 
     @NotNull
-    private static Replicas extractReplicas(@NotNull final String query) {
-        if (!query.contains(REPLICAS_PREFIX)) {
-            return new Replicas(false);
+    private static Set<String> sortSet(@NotNull final Set<String> unsortedSet) {
+        Set<String> sortedSet = new TreeSet<>(String::compareTo);
+        sortedSet.addAll(unsortedSet);
+        return sortedSet;
+    }
+
+    private void createContextStatus(){
+        this.server.createContext("/v0/status",
+                http -> executorOfStatus.execute(() -> {
+                    try {
+                        final String response = "ONLINE";
+                        http.sendResponseHeaders(200,response.length());
+                        http.getResponseBody().write(response.getBytes());
+
+                    } catch (IOException ex) {
+                        System.out.println(ex);
+
+                    } finally {
+                        http.close();
+                    }
+
+                }));
+    }
+
+    private void createContextEntity(){
+        this.server.createContext("/v0/entity",
+                (HttpExchange http) -> executorOfEntity.execute(() -> {
+                    try {
+                        final String id = extractId(http.getRequestURI().getQuery());
+                        final Replicas replicas = extractReplicas(http.getRequestURI().getQuery());
+
+                        if ("".equals(id) || replicas.getAck() > replicas.getFrom() || replicas.getAck() < 1) {
+                            http.sendResponseHeaders(400,0);
+                            http.close();
+                            return;
+                        }
+
+                        Iterator<String> iterator = topology.iterator();
+                        InnerRequestAnswer ira = new InnerRequestAnswer(504, new byte[0]);
+                        List<InnerRequestAnswer> listIRA = new ArrayList<>();
+                        int responseCode = 504;
+
+                        switch (http.getRequestMethod()){
+                            case GET_REQUEST :
+                                System.out.println(GET_REQUEST);
+                                for (int i = 0; i < topology.size() && i < replicas.getAck(); i++) {
+                                    ira = sendInnerRequest(id, iterator.next(), GET_REQUEST, null);
+                                    listIRA.add(ira);
+                                }
+                                for (InnerRequestAnswer element : listIRA) { // всё хорошо 200, не нашёл 404, не дойти до сервера 504
+                                    if (element.getResponseCode() == 200)
+                                        responseCode = 200;
+                                    if (element.getResponseCode() == 504 && responseCode != 200) {
+                                        responseCode = 504;
+                                    }
+                                }
+
+                                http.sendResponseHeaders(responseCode, 0);
+                                http.getResponseBody().write(ira.getOutputData());
+                                break;
+
+                            case DELETE_REQUEST :
+                                System.out.println(DELETE_REQUEST);
+                                ira = sendInnerRequest(id, iterator.next(), DELETE_REQUEST, null);
+
+                                http.sendResponseHeaders(ira.getResponseCode(), 0);
+                                break;
+
+                            case PUT_REQUEST :
+                                System.out.println(PUT_REQUEST);
+                                try (InputStream requestStream = http.getRequestBody()){
+                                    ira = sendInnerRequest(id, iterator.next(),
+                                            PUT_REQUEST, StreamReader.readDataFromStream(requestStream));
+
+                                    http.sendResponseHeaders(ira.getResponseCode(), 0);
+                                }
+                                break;
+                            default:
+                                http.sendResponseHeaders(405, 0);
+                                break;
+                        }
+                        http.close();
+
+                    } catch (IOException ex) {
+                        System.out.println(ex);
+                    }
+                }));
+    }
+
+    private void createContextInner() {
+        this.server.createContext("/v0/inner",
+                (HttpExchange http) -> executorOfInner.execute(() -> {
+                    try {
+                        final String id = extractId(http.getRequestURI().getQuery());
+
+                        if ("".equals(id)) {
+                            http.sendResponseHeaders(400,0);
+                            http.close();
+                            return;
+                        }
+
+                        switch (http.getRequestMethod()){
+                            case GET_REQUEST :
+                                System.out.println(GET_REQUEST);
+                                requestMethodGet(http, id);
+                                break;
+
+                            case DELETE_REQUEST :
+                                System.out.println(DELETE_REQUEST);
+                                requestMethodDelete(http, id);
+                                break;
+
+                            case PUT_REQUEST :
+                                System.out.println(PUT_REQUEST);
+                                requestMethodPut(http, id);
+                                break;
+
+                            default:
+                                http.sendResponseHeaders(405,0);
+                                break;
+                        }
+                        http.close();
+
+                    } catch (IOException ex) {
+                        System.out.println(ex);
+                    }
+                }));
+    }
+
+    @NotNull
+    private InnerRequestAnswer sendInnerRequest(@NotNull final String id, @NotNull final String port,
+                                                @NotNull final String typeOfRequest,
+                                                @Nullable byte[] inputDataForPut)  throws IOException {
+        URL url = new URL(port + "/v0/inner?id=" + id);
+        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+
+        conn.setRequestMethod(typeOfRequest);
+        conn.setDoOutput(true);
+        conn.setDoInput(true);
+
+        byte[] outputDataForGet = new byte[0];
+
+        try {
+            switch (typeOfRequest){
+                case GET_REQUEST :
+                    try (InputStream inputStream = conn.getInputStream()) {
+                        outputDataForGet = StreamReader.readDataFromStream(inputStream);
+                    }
+                    break;
+
+                case PUT_REQUEST :
+                    if (inputDataForPut != null) {
+
+
+                        try (OutputStream outputStream = conn.getOutputStream()) {
+                            outputStream.write(inputDataForPut);
+                        }
+                    }
+                    break;
+            }
+        } catch (IOException e) {
+            //do nothing
         }
 
+        int responseCode = 504;
+        try {
+            responseCode = conn.getResponseCode();
+
+        } catch (IOException e) {
+            //do nothing
+        }
+        conn.disconnect();
+
+        return new InnerRequestAnswer(responseCode, outputDataForGet);
+    }
+
+    private void requestMethodGet(@NotNull final HttpExchange http, @NotNull final String id) throws IOException {
+        try {
+            final byte[] getValue = dao.get(id);
+            http.sendResponseHeaders(200, getValue.length);
+            http.getResponseBody().write(getValue);
+
+        } catch (NoSuchElementException | IOException e) {
+            http.sendResponseHeaders(404,0);
+        }
+    }
+
+    private void requestMethodDelete(@NotNull final HttpExchange http, @NotNull final String id) throws IOException {
+        dao.delete(id);
+        http.sendResponseHeaders(202, 0);
+    }
+
+    private void requestMethodPut(@NotNull final HttpExchange http, @NotNull final String id) throws IOException {
+        try (InputStream requestStream = http.getRequestBody()){
+            dao.upsert(id, StreamReader.readDataFromStream(requestStream));
+        }
+        http.sendResponseHeaders(201, 0);
+    }
+
+    @NotNull
+    private Replicas extractReplicas(@NotNull final String query) {
+        if (!query.contains(REPLICAS_PREFIX)) {
+            int defaultValueOfAck = topology.size()/2 + 1;
+            int defaultValueOfFrom = topology.size();
+            return new Replicas(defaultValueOfAck, defaultValueOfFrom);
+        }
         if(!Pattern.matches("^(.)*" + REPLICAS_PREFIX + "([0-9])*" + SLASH + "([0-9])*$", query)) {
             throw new IllegalArgumentException("Wrong replicas");
         }
-
         String partsOfReplicas[] = query.substring(
                 query.indexOf(REPLICAS_PREFIX) + REPLICAS_PREFIX.length()).split(SLASH);
 
@@ -236,7 +316,7 @@ public class MyService implements KVService {
     }
 
     @NotNull
-    private static String extractId(@NotNull final String query) {
+    private String extractId(@NotNull final String query) {
         if(!query.startsWith(ID_PREFIX)) {
             throw new IllegalArgumentException("Wrong id");
         }
