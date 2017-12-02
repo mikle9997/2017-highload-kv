@@ -142,39 +142,63 @@ public class MyService implements KVService {
                         List<InnerRequestAnswer> listIRA = new ArrayList<>();
                         int responseCode = 0;
 
+                        System.out.println(topology);
+
                         switch (http.getRequestMethod()){
                             case GET_REQUEST :
                                 System.out.println(GET_REQUEST);
-                                ira = sendInnerRequest(id, iterator.next(), GET_REQUEST, null);
-//                                for (int i = 0; i < topology.size() && i < replicas.getAck(); i++) {
-//                                    ira = sendInnerRequest(id, iterator.next(), GET_REQUEST, null);
-//                                    listIRA.add(ira);
-//                                }
-//                                for (InnerRequestAnswer element : listIRA) { // всё хорошо 200, не нашёл 404, не дойти до сервера 504
-//                                    if (element.getResponseCode() == 200)
-//                                        responseCode = 200;
-//                                    if (element.getResponseCode() == 504 && responseCode != 200) {
-//                                        responseCode = 504;
-//                                    }
-//                                }
-                                responseCode = ira.responseCode;
+                                for (int i = 0; i < topology.size() && i < replicas.getFrom(); i++) {
+                                    ira = sendInnerRequest(id, iterator.next(), GET_REQUEST, null);
+                                    listIRA.add(ira);
+                                }
+                                int number_of_200 = 0;
+                                int number_of_504 = 0;
+                                for (InnerRequestAnswer element : listIRA) {
+                                    if (element.getResponseCode() == 200)
+                                        number_of_200++;
+                                    else if (element.getResponseCode() == 504)
+                                        number_of_504++;
+                                }
+                                System.out.println("number_of_200: "+" "+number_of_200+"\n"+
+                                        "number_of_504: "+" "+number_of_504+"\n"+
+                                        "listIRA: "+" "+listIRA+"\n"+
+                                        "number_of_getAck(): "+" "+replicas.getAck()+"\n"+
+                                        "number_of_getFrom(): "+" "+replicas.getFrom());
+
+                                if (number_of_200 >= replicas.getAck())
+                                    responseCode = 200;
+                                else if (number_of_504 > 0)
+                                    responseCode = 504;
+                                else
+                                    responseCode = 404;
+
+                                System.out.println(responseCode);
                                 http.sendResponseHeaders(responseCode, 0);
-                                http.getResponseBody().write(ira.getOutputData());
+                                if (responseCode == 200) {
+                                    byte[] outputValue = new byte[0];
+                                    for (InnerRequestAnswer element : listIRA)
+                                        if (element.getOutputData().length != 0)
+                                            outputValue = element.getOutputData();
+
+                                    http.getResponseBody().write(outputValue);
+                                }
                                 break;
 
                             case DELETE_REQUEST :
                                 System.out.println(DELETE_REQUEST);
-                                ira = sendInnerRequest(id, iterator.next(), DELETE_REQUEST, null);
-
+                                for (int i = 0; i < topology.size() && i < replicas.getFrom(); i++) {
+                                    ira = sendInnerRequest(id, iterator.next(), DELETE_REQUEST, null);
+                                }
                                 http.sendResponseHeaders(ira.getResponseCode(), 0);
                                 break;
 
                             case PUT_REQUEST :
                                 System.out.println(PUT_REQUEST);
                                 try (InputStream requestStream = http.getRequestBody()){
-                                    ira = sendInnerRequest(id, iterator.next(),
-                                            PUT_REQUEST, StreamReader.readDataFromStream(requestStream));
-
+                                    for (int i = 0; i < topology.size() && i < replicas.getFrom(); i++) {
+                                        ira = sendInnerRequest(id, iterator.next(),
+                                                PUT_REQUEST, StreamReader.readDataFromStream(requestStream));
+                                    }
                                     http.sendResponseHeaders(ira.getResponseCode(), 0);
                                 }
                                 break;
@@ -184,10 +208,16 @@ public class MyService implements KVService {
                         }
                         http.close();
 
+                        sendResponseHeaders(http, id);
+
                     } catch (IOException ex) {
                         System.out.println(ex);
                     }
                 }));
+    }
+
+    private void sendResponseHeaders(@NotNull final HttpExchange http, @NotNull final String id) {
+
     }
 
     private void createContextInner() {
@@ -202,7 +232,7 @@ public class MyService implements KVService {
                             return;
                         }
 
-                        switch (http.getRequestMethod()){
+                        switch (http.getRequestMethod()) {
                             case GET_REQUEST :
                                 System.out.println(GET_REQUEST);
                                 requestMethodGet(http, id);
@@ -244,7 +274,7 @@ public class MyService implements KVService {
         byte[] outputDataForGet = new byte[0];
 
         try {
-            switch (typeOfRequest){
+            switch (typeOfRequest) {
                 case GET_REQUEST :
                     try (InputStream inputStream = conn.getInputStream()) {
                         outputDataForGet = StreamReader.readDataFromStream(inputStream);
@@ -253,8 +283,6 @@ public class MyService implements KVService {
 
                 case PUT_REQUEST :
                     if (inputDataForPut != null) {
-
-
                         try (OutputStream outputStream = conn.getOutputStream()) {
                             outputStream.write(inputDataForPut);
                         }
@@ -294,7 +322,7 @@ public class MyService implements KVService {
     }
 
     private void requestMethodPut(@NotNull final HttpExchange http, @NotNull final String id) throws IOException {
-        try (InputStream requestStream = http.getRequestBody()){
+        try (InputStream requestStream = http.getRequestBody()) {
             dao.upsert(id, StreamReader.readDataFromStream(requestStream));
         }
         http.sendResponseHeaders(201, 0);
@@ -307,7 +335,7 @@ public class MyService implements KVService {
             int defaultValueOfFrom = topology.size();
             return new Replicas(defaultValueOfAck, defaultValueOfFrom);
         }
-        if(!Pattern.matches("^(.)*" + REPLICAS_PREFIX + "([0-9])*" + SLASH + "([0-9])*$", query)) {
+        if (!Pattern.matches("^(.)*" + REPLICAS_PREFIX + "([0-9])*" + SLASH + "([0-9])*$", query)) {
             throw new IllegalArgumentException("Wrong replicas");
         }
         String partsOfReplicas[] = query.substring(
@@ -318,7 +346,7 @@ public class MyService implements KVService {
 
     @NotNull
     private String extractId(@NotNull final String query) {
-        if(!query.startsWith(ID_PREFIX)) {
+        if (!query.startsWith(ID_PREFIX)) {
             throw new IllegalArgumentException("Wrong id");
         }
 
