@@ -31,6 +31,13 @@ public class MyService implements KVService {
     private static final String REPLICAS_PREFIX = "&replicas=";
     private static final String SLASH = "/";
 
+    private static final int BAD_REQUEST = 400;
+    private static final int OK = 200;
+    private static final int CREATED = 201;
+    private static final int NOT_FOUND = 404;
+    private static final int METHOD_NOT_ALLOWED = 405;
+    private static final int GATEWAY_TIMEOUT = 504;
+
     private static final String GET_REQUEST = "GET";
     private static final String DELETE_REQUEST = "DELETE";
     private static final String PUT_REQUEST = "PUT";
@@ -111,7 +118,7 @@ public class MyService implements KVService {
                 http -> executorOfStatus.execute(() -> {
                     try {
                         final String response = "ONLINE";
-                        http.sendResponseHeaders(200,response.length());
+                        http.sendResponseHeaders(OK,response.length());
                         http.getResponseBody().write(response.getBytes());
 
                     } catch (IOException ex) {
@@ -132,17 +139,14 @@ public class MyService implements KVService {
                         final Replicas replicas = extractReplicas(http.getRequestURI().getQuery());
 
                         if ("".equals(id) || replicas.getAck() > replicas.getFrom() || replicas.getAck() < 1) {
-                            http.sendResponseHeaders(400,0);
+                            http.sendResponseHeaders(BAD_REQUEST,0);
                             http.close();
                             return;
                         }
 
                         Iterator<String> iterator = topology.iterator();
-                        InnerRequestAnswer ira = new InnerRequestAnswer(504, new byte[0]);
+                        InnerRequestAnswer ira = new InnerRequestAnswer(GATEWAY_TIMEOUT, new byte[0]);
                         List<InnerRequestAnswer> listIRA = new ArrayList<>();
-                        int responseCode = 0;
-
-                        System.out.println(topology);
 
                         switch (http.getRequestMethod()){
                             case GET_REQUEST :
@@ -151,30 +155,10 @@ public class MyService implements KVService {
                                     ira = sendInnerRequest(id, iterator.next(), GET_REQUEST, null);
                                     listIRA.add(ira);
                                 }
-                                int number_of_200 = 0;
-                                int number_of_504 = 0;
-                                for (InnerRequestAnswer element : listIRA) {
-                                    if (element.getResponseCode() == 200)
-                                        number_of_200++;
-                                    else if (element.getResponseCode() == 504)
-                                        number_of_504++;
-                                }
-                                System.out.println("number_of_200: "+" "+number_of_200+"\n"+
-                                        "number_of_504: "+" "+number_of_504+"\n"+
-                                        "listIRA: "+" "+listIRA+"\n"+
-                                        "number_of_getAck(): "+" "+replicas.getAck()+"\n"+
-                                        "number_of_getFrom(): "+" "+replicas.getFrom());
-
-                                if (number_of_200 >= replicas.getAck())
-                                    responseCode = 200;
-                                else if (number_of_504 > 0)
-                                    responseCode = 504;
-                                else
-                                    responseCode = 404;
-
-                                System.out.println(responseCode);
+                                System.out.println(listIRA);
+                                int responseCode = detectResponseCode(listIRA, replicas, GET_REQUEST);
                                 http.sendResponseHeaders(responseCode, 0);
-                                if (responseCode == 200) {
+                                if (responseCode == OK) {
                                     byte[] outputValue = new byte[0];
                                     for (InnerRequestAnswer element : listIRA)
                                         if (element.getOutputData().length != 0)
@@ -198,17 +182,17 @@ public class MyService implements KVService {
                                     for (int i = 0; i < topology.size() && i < replicas.getFrom(); i++) {
                                         ira = sendInnerRequest(id, iterator.next(),
                                                 PUT_REQUEST, StreamReader.readDataFromStream(requestStream));
+                                        listIRA.add(ira);
                                     }
-                                    http.sendResponseHeaders(ira.getResponseCode(), 0);
+                                    System.out.println(listIRA);
+                                    http.sendResponseHeaders(detectResponseCode(listIRA, replicas, PUT_REQUEST), 0);
                                 }
                                 break;
                             default:
-                                http.sendResponseHeaders(405, 0);
+                                http.sendResponseHeaders(METHOD_NOT_ALLOWED, 0);
                                 break;
                         }
                         http.close();
-
-                        sendResponseHeaders(http, id);
 
                     } catch (IOException ex) {
                         System.out.println(ex);
@@ -216,8 +200,40 @@ public class MyService implements KVService {
                 }));
     }
 
-    private void sendResponseHeaders(@NotNull final HttpExchange http, @NotNull final String id) {
+    private int detectResponseCode(@NotNull final List<InnerRequestAnswer> listIRA,
+                                   @NotNull final Replicas replicas, @NotNull final String nameOfMethod) {
+        int numberOfSuccessAnswers = 0;
+        int numberOfServerErrors = 0;
 
+        int codeOfMethod;
+        switch (nameOfMethod) {
+            case "PUT" :
+                codeOfMethod = CREATED;
+                break;
+
+            case "GET" :
+                codeOfMethod = OK;
+                break;
+
+            default:
+                codeOfMethod = 0;
+        }
+
+        for (InnerRequestAnswer element : listIRA)
+            if (element.getResponseCode() == codeOfMethod)
+                numberOfSuccessAnswers++;
+            else if (element.getResponseCode() == GATEWAY_TIMEOUT)
+                numberOfServerErrors++;
+
+        int responseCode;
+        if (numberOfSuccessAnswers >= replicas.getAck())
+            responseCode = codeOfMethod;
+        else if (numberOfServerErrors == 0)
+            responseCode = NOT_FOUND;
+        else
+            responseCode = GATEWAY_TIMEOUT;
+
+        return responseCode;
     }
 
     private void createContextInner() {
@@ -227,29 +243,29 @@ public class MyService implements KVService {
                         final String id = extractId(http.getRequestURI().getQuery());
 
                         if ("".equals(id)) {
-                            http.sendResponseHeaders(400,0);
+                            http.sendResponseHeaders(BAD_REQUEST,0);
                             http.close();
                             return;
                         }
 
                         switch (http.getRequestMethod()) {
                             case GET_REQUEST :
-                                System.out.println(GET_REQUEST);
+                                System.out.println(GET_REQUEST + " inner");
                                 requestMethodGet(http, id);
                                 break;
 
                             case DELETE_REQUEST :
-                                System.out.println(DELETE_REQUEST);
+                                System.out.println(DELETE_REQUEST + " inner");
                                 requestMethodDelete(http, id);
                                 break;
 
                             case PUT_REQUEST :
-                                System.out.println(PUT_REQUEST);
+                                System.out.println(PUT_REQUEST + " inner");
                                 requestMethodPut(http, id);
                                 break;
 
                             default:
-                                http.sendResponseHeaders(405,0);
+                                http.sendResponseHeaders(METHOD_NOT_ALLOWED,0);
                                 break;
                         }
                         http.close();
@@ -293,10 +309,9 @@ public class MyService implements KVService {
             //do nothing
         }
 
-        int responseCode = 504;
+        int responseCode = GATEWAY_TIMEOUT;
         try {
             responseCode = conn.getResponseCode();
-
         } catch (IOException e) {
             //do nothing
         }
@@ -308,11 +323,11 @@ public class MyService implements KVService {
     private void requestMethodGet(@NotNull final HttpExchange http, @NotNull final String id) throws IOException {
         try {
             final byte[] getValue = dao.get(id);
-            http.sendResponseHeaders(200, getValue.length);
+            http.sendResponseHeaders(OK, getValue.length);
             http.getResponseBody().write(getValue);
 
         } catch (NoSuchElementException | IOException e) {
-            http.sendResponseHeaders(404,0);
+            http.sendResponseHeaders(NOT_FOUND,0);
         }
     }
 
@@ -325,7 +340,7 @@ public class MyService implements KVService {
         try (InputStream requestStream = http.getRequestBody()) {
             dao.upsert(id, StreamReader.readDataFromStream(requestStream));
         }
-        http.sendResponseHeaders(201, 0);
+        http.sendResponseHeaders(CREATED, 0);
     }
 
     @NotNull
