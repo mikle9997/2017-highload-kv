@@ -31,9 +31,10 @@ public class MyService implements KVService {
     private static final String REPLICAS_PREFIX = "&replicas=";
     private static final String SLASH = "/";
 
-    private static final int BAD_REQUEST = 400;
     private static final int OK = 200;
     private static final int CREATED = 201;
+    private static final int ACCEPTED = 202;
+    private static final int BAD_REQUEST = 400;
     private static final int NOT_FOUND = 404;
     private static final int METHOD_NOT_ALLOWED = 405;
     private static final int GATEWAY_TIMEOUT = 504;
@@ -45,6 +46,8 @@ public class MyService implements KVService {
     private final Executor executorOfStatus = Executors.newCachedThreadPool();
     private final Executor executorOfEntity = Executors.newCachedThreadPool();
     private final Executor executorOfInner = Executors.newSingleThreadExecutor();
+
+    private Set<NotRespondingOnTheRequest> query;
 
     private class Replicas {
 
@@ -67,7 +70,10 @@ public class MyService implements KVService {
 
         @Override
         public String toString() {
-            return ack + " " + from;
+            return "Replicas{" +
+                    "ack=" + ack +
+                    ", from=" + from +
+                    '}';
         }
     }
 
@@ -75,10 +81,12 @@ public class MyService implements KVService {
 
         private final int responseCode;
         private final byte[] outputData;
+        private final String portWhichGaveAnswer;
 
-        public InnerRequestAnswer(final int responseCode, @NotNull final byte[] outputData) {
+        public InnerRequestAnswer(final int responseCode, @NotNull final byte[] outputData, @NotNull final String portWhichGaveAnswer) {
             this.responseCode = responseCode;
             this.outputData = outputData;
+            this.portWhichGaveAnswer = portWhichGaveAnswer;
         }
 
         public int getResponseCode() {
@@ -90,9 +98,45 @@ public class MyService implements KVService {
             return outputData;
         }
 
+        @NotNull
+        public String getPortWhichGaveAnswer() {
+            return portWhichGaveAnswer;
+        }
+
         @Override
         public String toString() {
-            return Integer.toString(responseCode);
+            return "InnerRequestAnswer{" +
+                    "responseCode=" + responseCode +
+                    ", outputData=" + Arrays.toString(outputData) +
+                    ", portWhichGaveAnswer='" + portWhichGaveAnswer + '\'' +
+                    '}';
+        }
+    }
+
+    private class NotRespondingOnTheRequest {
+
+        private final Set<String> setOfNotRespondingPorts;
+        private final String requestMethod;
+
+        public NotRespondingOnTheRequest(@NotNull final Set<String> topology, @NotNull final String requestMethod) {
+            this.setOfNotRespondingPorts = topology;
+            this.requestMethod = requestMethod;
+        }
+
+        public Set<String> getSetOfNotRespondingPorts() {
+            return setOfNotRespondingPorts;
+        }
+
+        public String getRequestMethod() {
+            return requestMethod;
+        }
+
+        @Override
+        public String toString() {
+            return "NotRespondingOnTheRequest{" +
+                    "setOfNotRespondingPorts=" + setOfNotRespondingPorts +
+                    ", requestMethod='" + requestMethod + '\'' +
+                    '}';
         }
     }
 
@@ -145,7 +189,7 @@ public class MyService implements KVService {
                         }
 
                         Iterator<String> iterator = topology.iterator();
-                        InnerRequestAnswer ira = new InnerRequestAnswer(GATEWAY_TIMEOUT, new byte[0]);
+                        InnerRequestAnswer ira;
                         List<InnerRequestAnswer> listIRA = new ArrayList<>();
 
                         switch (http.getRequestMethod()){
@@ -155,8 +199,7 @@ public class MyService implements KVService {
                                     ira = sendInnerRequest(id, iterator.next(), GET_REQUEST, null);
                                     listIRA.add(ira);
                                 }
-                                System.out.println(listIRA);
-                                int responseCode = detectResponseCode(listIRA, replicas, GET_REQUEST);
+                                int responseCode = processingOfRequestAnswers(listIRA, replicas, GET_REQUEST, id);
                                 http.sendResponseHeaders(responseCode, 0);
                                 if (responseCode == OK) {
                                     byte[] outputValue = new byte[0];
@@ -172,8 +215,9 @@ public class MyService implements KVService {
                                 System.out.println(DELETE_REQUEST);
                                 for (int i = 0; i < topology.size() && i < replicas.getFrom(); i++) {
                                     ira = sendInnerRequest(id, iterator.next(), DELETE_REQUEST, null);
+                                    listIRA.add(ira);
                                 }
-                                http.sendResponseHeaders(ira.getResponseCode(), 0);
+                                http.sendResponseHeaders(processingOfRequestAnswers(listIRA, replicas, DELETE_REQUEST, id), 0);
                                 break;
 
                             case PUT_REQUEST :
@@ -184,8 +228,7 @@ public class MyService implements KVService {
                                                 PUT_REQUEST, StreamReader.readDataFromStream(requestStream));
                                         listIRA.add(ira);
                                     }
-                                    System.out.println(listIRA);
-                                    http.sendResponseHeaders(detectResponseCode(listIRA, replicas, PUT_REQUEST), 0);
+                                    http.sendResponseHeaders(processingOfRequestAnswers(listIRA, replicas, PUT_REQUEST, id), 0);
                                 }
                                 break;
                             default:
@@ -200,30 +243,42 @@ public class MyService implements KVService {
                 }));
     }
 
-    private int detectResponseCode(@NotNull final List<InnerRequestAnswer> listIRA,
-                                   @NotNull final Replicas replicas, @NotNull final String nameOfMethod) {
+    private int processingOfRequestAnswers(@NotNull final List<InnerRequestAnswer> listIRA,
+                                           @NotNull final Replicas replicas, @NotNull final String nameOfMethod,
+                                           @NotNull final String id) {
+
+        if (listIRA.size() == 0)
+            return GATEWAY_TIMEOUT;
+
         int numberOfSuccessAnswers = 0;
         int numberOfServerErrors = 0;
 
         int codeOfMethod;
         switch (nameOfMethod) {
-            case "PUT" :
+            case PUT_REQUEST :
                 codeOfMethod = CREATED;
                 break;
 
-            case "GET" :
+            case GET_REQUEST :
                 codeOfMethod = OK;
                 break;
 
+            case DELETE_REQUEST :
+                codeOfMethod = ACCEPTED;
+                break;
+
             default:
-                codeOfMethod = 0;
+                codeOfMethod = METHOD_NOT_ALLOWED;
+                break;
         }
 
         for (InnerRequestAnswer element : listIRA)
             if (element.getResponseCode() == codeOfMethod)
                 numberOfSuccessAnswers++;
-            else if (element.getResponseCode() == GATEWAY_TIMEOUT)
+            else if (element.getResponseCode() == GATEWAY_TIMEOUT) {
                 numberOfServerErrors++;
+
+            }
 
         int responseCode;
         if (numberOfSuccessAnswers >= replicas.getAck())
@@ -317,7 +372,7 @@ public class MyService implements KVService {
         }
         conn.disconnect();
 
-        return new InnerRequestAnswer(responseCode, outputDataForGet);
+        return new InnerRequestAnswer(responseCode, outputDataForGet, port);
     }
 
     private void requestMethodGet(@NotNull final HttpExchange http, @NotNull final String id) throws IOException {
@@ -333,7 +388,7 @@ public class MyService implements KVService {
 
     private void requestMethodDelete(@NotNull final HttpExchange http, @NotNull final String id) throws IOException {
         dao.delete(id);
-        http.sendResponseHeaders(202, 0);
+        http.sendResponseHeaders(ACCEPTED, 0);
     }
 
     private void requestMethodPut(@NotNull final HttpExchange http, @NotNull final String id) throws IOException {
@@ -383,4 +438,5 @@ public class MyService implements KVService {
     public void stop() {
         this.server.stop(0);
     }
+
 }
