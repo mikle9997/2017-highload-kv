@@ -12,9 +12,9 @@ public class StreamReader {
 
     @NotNull
     public static byte[] readDataFromStream(@NotNull final InputStream in) throws IOException {
-        byte[] buffer = new byte[SIZE_OF_BUFFER];
+        final byte[] buffer = new byte[SIZE_OF_BUFFER];
 
-        try (ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
+        try (final ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
             int numberOfBytesRead;
             while ((numberOfBytesRead = in.read(buffer)) != -1) {
                 baos.write(buffer,0, numberOfBytesRead);

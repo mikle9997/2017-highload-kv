@@ -22,7 +22,7 @@ public class MyFileDAO implements MyDAO {
     public byte[] get(@NotNull final String key) throws NoSuchElementException, IllegalArgumentException, IOException {
         final File file = getFile(key);
 
-        if(!file.exists()) {
+        if (!file.exists()) {
             throw new NoSuchElementException("Invalid key: " + key);
         }
 
@@ -34,13 +34,7 @@ public class MyFileDAO implements MyDAO {
         }
 
         try (BufferedInputStream f = new BufferedInputStream(new FileInputStream(file))) {
-            if(f.available() == fileLength) {
-                f.read(value);
-                return value;
-
-            } else {
-                return StreamReader.readDataFromStream(f);
-            }
+            return StreamReader.readDataFromStream(f);
         }
     }
 
