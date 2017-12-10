@@ -27,6 +27,9 @@ public class MyService implements KVService {
     @NotNull
     private final Set<String> topology;
 
+    @NotNull
+    private final String address;
+
     private static final String ID_PREFIX = "id=";
     private static final String REPLICAS_PREFIX = "&replicas=";
     private static final String SLASH = "/";
@@ -46,8 +49,9 @@ public class MyService implements KVService {
     private final Executor executorOfStatus = Executors.newCachedThreadPool();
     private final Executor executorOfEntity = Executors.newCachedThreadPool();
     private final Executor executorOfInner = Executors.newSingleThreadExecutor();
+    private final Executor executorOfStart = Executors.newSingleThreadExecutor();
 
-    private Set<NotRespondingOnTheRequest> query;
+    private final Set<NotRespondingOnTheRequest> setOfNotRespondingOnTheRequest = new HashSet<>();
 
     private class Replicas {
 
@@ -81,11 +85,14 @@ public class MyService implements KVService {
 
         private final int responseCode;
         private final byte[] outputData;
+        private final byte[] inputData;
         private final String portWhichGaveAnswer;
 
-        public InnerRequestAnswer(final int responseCode, @NotNull final byte[] outputData, @NotNull final String portWhichGaveAnswer) {
+        public InnerRequestAnswer(final int responseCode, @NotNull final byte[] outputData,
+                                  @NotNull final String portWhichGaveAnswer, @Nullable final byte[] inputData) {
             this.responseCode = responseCode;
             this.outputData = outputData;
+            this.inputData = inputData;
             this.portWhichGaveAnswer = portWhichGaveAnswer;
         }
 
@@ -103,32 +110,56 @@ public class MyService implements KVService {
             return portWhichGaveAnswer;
         }
 
+        @Nullable
+        public byte[] getInputData() {
+            return inputData;
+        }
+
         @Override
         public String toString() {
             return "InnerRequestAnswer{" +
                     "responseCode=" + responseCode +
                     ", outputData=" + Arrays.toString(outputData) +
+                    ", inputData=" + Arrays.toString(inputData) +
                     ", portWhichGaveAnswer='" + portWhichGaveAnswer + '\'' +
                     '}';
         }
     }
 
-    private class NotRespondingOnTheRequest {
+    private static class NotRespondingOnTheRequest implements Serializable{
 
-        private final Set<String> setOfNotRespondingPorts;
-        private final String requestMethod;
+        public final Set<String> setOfNotRespondingPorts = new HashSet<>();
+        public final String requestMethod;
+        public final String id;
+        public byte[] inputData = new byte[0];
 
-        public NotRespondingOnTheRequest(@NotNull final Set<String> topology, @NotNull final String requestMethod) {
-            this.setOfNotRespondingPorts = topology;
+        public NotRespondingOnTheRequest(@NotNull final String requestMethod, @NotNull final String id) {
             this.requestMethod = requestMethod;
+            this.id = id;
         }
 
-        public Set<String> getSetOfNotRespondingPorts() {
+        public void addPortToSet(@NotNull final String port) {
+            setOfNotRespondingPorts.add(port);
+        }
+
+        public Set<String> getNotRespondingPorts() {
             return setOfNotRespondingPorts;
+        }
+
+        public String getId() {
+            return id;
         }
 
         public String getRequestMethod() {
             return requestMethod;
+        }
+
+        public byte[] getInputData() {
+            return inputData;
+        }
+
+        public void setInputData(@Nullable byte[] inputData) {
+            this.inputData = inputData;
         }
 
         @Override
@@ -136,25 +167,54 @@ public class MyService implements KVService {
             return "NotRespondingOnTheRequest{" +
                     "setOfNotRespondingPorts=" + setOfNotRespondingPorts +
                     ", requestMethod='" + requestMethod + '\'' +
+                    ", id='" + id + '\'' +
                     '}';
         }
     }
 
-    public MyService(final int port, @NotNull final Set<String> entireTopology,@NotNull MyDAO dao) throws IOException {
-        this.server = HttpServer.create(new InetSocketAddress(port),0);
+    public MyService(final int port, @NotNull final Set<String> topology, @NotNull MyDAO dao) throws IOException {
+        this.server = HttpServer.create(new InetSocketAddress(port), 0);
         this.dao = dao;
-        this.topology = sortSet(entireTopology);
+        this.topology = sortSet(topology);
+        this.address = findPort(port);
 
         createContextStatus();
         createContextEntity();
         createContextInner();
+        createContextStart();
+    }
+
+    private String findPort(final int port) {
+        for (String str : this.topology)
+            if (str.contains(Integer.toString(port))) {
+                return str;
+            }
+        return topology.iterator().next();
     }
 
     @NotNull
     private static Set<String> sortSet(@NotNull final Set<String> unsortedSet) {
-        Set<String> sortedSet = new TreeSet<>(String::compareTo);
+        final Set<String> sortedSet = new TreeSet<>(String::compareTo);
         sortedSet.addAll(unsortedSet);
         return sortedSet;
+    }
+
+    private void createContextStart(){
+        this.server.createContext("/v0/start",
+                http -> executorOfStart.execute(() -> {
+                    try {
+                        http.sendResponseHeaders(OK, 0);
+                        try (final ObjectOutputStream oos = new ObjectOutputStream(http.getResponseBody())) {
+                            oos.writeObject(setOfNotRespondingOnTheRequest);
+                        }
+
+                    } catch (IOException ex) {
+                        System.out.println("Start context: " + ex);
+
+                    } finally {
+                        http.close();
+                    }
+                }));
     }
 
     private void createContextStatus(){
@@ -162,7 +222,7 @@ public class MyService implements KVService {
                 http -> executorOfStatus.execute(() -> {
                     try {
                         final String response = "ONLINE";
-                        http.sendResponseHeaders(OK,response.length());
+                        http.sendResponseHeaders(OK, response.length());
                         http.getResponseBody().write(response.getBytes());
 
                     } catch (IOException ex) {
@@ -188,9 +248,9 @@ public class MyService implements KVService {
                             return;
                         }
 
-                        Iterator<String> iterator = topology.iterator();
+                        final Iterator<String> iterator = topology.iterator();
                         InnerRequestAnswer ira;
-                        List<InnerRequestAnswer> listIRA = new ArrayList<>();
+                        final List<InnerRequestAnswer> listIRA = new ArrayList<>();
 
                         switch (http.getRequestMethod()){
                             case GET_REQUEST :
@@ -199,7 +259,7 @@ public class MyService implements KVService {
                                     ira = sendInnerRequest(id, iterator.next(), GET_REQUEST, null);
                                     listIRA.add(ira);
                                 }
-                                int responseCode = processingOfRequestAnswers(listIRA, replicas, GET_REQUEST, id);
+                                final int responseCode = processingRequestAnswers(listIRA, replicas, GET_REQUEST, id);
                                 http.sendResponseHeaders(responseCode, 0);
                                 if (responseCode == OK) {
                                     byte[] outputValue = new byte[0];
@@ -217,18 +277,18 @@ public class MyService implements KVService {
                                     ira = sendInnerRequest(id, iterator.next(), DELETE_REQUEST, null);
                                     listIRA.add(ira);
                                 }
-                                http.sendResponseHeaders(processingOfRequestAnswers(listIRA, replicas, DELETE_REQUEST, id), 0);
+                                http.sendResponseHeaders(processingRequestAnswers(listIRA, replicas, DELETE_REQUEST, id), 0);
                                 break;
 
                             case PUT_REQUEST :
                                 System.out.println(PUT_REQUEST);
-                                try (InputStream requestStream = http.getRequestBody()){
+                                try (final InputStream requestStream = http.getRequestBody()){
                                     for (int i = 0; i < topology.size() && i < replicas.getFrom(); i++) {
                                         ira = sendInnerRequest(id, iterator.next(),
                                                 PUT_REQUEST, StreamReader.readDataFromStream(requestStream));
                                         listIRA.add(ira);
                                     }
-                                    http.sendResponseHeaders(processingOfRequestAnswers(listIRA, replicas, PUT_REQUEST, id), 0);
+                                    http.sendResponseHeaders(processingRequestAnswers(listIRA, replicas, PUT_REQUEST, id), 0);
                                 }
                                 break;
                             default:
@@ -243,46 +303,51 @@ public class MyService implements KVService {
                 }));
     }
 
-    private int processingOfRequestAnswers(@NotNull final List<InnerRequestAnswer> listIRA,
-                                           @NotNull final Replicas replicas, @NotNull final String nameOfMethod,
-                                           @NotNull final String id) {
-
+    private int processingRequestAnswers(@NotNull final List<InnerRequestAnswer> listIRA,
+                                         @NotNull final Replicas replicas, @NotNull final String nameOfMethod,
+                                         @NotNull final String id) {
         if (listIRA.size() == 0)
             return GATEWAY_TIMEOUT;
 
         int numberOfSuccessAnswers = 0;
         int numberOfServerErrors = 0;
 
-        int codeOfMethod;
+        int positiveResponseToTheRequest;
         switch (nameOfMethod) {
             case PUT_REQUEST :
-                codeOfMethod = CREATED;
+                positiveResponseToTheRequest = CREATED;
                 break;
 
             case GET_REQUEST :
-                codeOfMethod = OK;
+                positiveResponseToTheRequest = OK;
                 break;
 
             case DELETE_REQUEST :
-                codeOfMethod = ACCEPTED;
+                positiveResponseToTheRequest = ACCEPTED;
                 break;
 
             default:
-                codeOfMethod = METHOD_NOT_ALLOWED;
+                positiveResponseToTheRequest = METHOD_NOT_ALLOWED;
                 break;
         }
 
+        final NotRespondingOnTheRequest nrr = new NotRespondingOnTheRequest(nameOfMethod, id);
         for (InnerRequestAnswer element : listIRA)
-            if (element.getResponseCode() == codeOfMethod)
+            if (element.getResponseCode() == positiveResponseToTheRequest)
                 numberOfSuccessAnswers++;
             else if (element.getResponseCode() == GATEWAY_TIMEOUT) {
                 numberOfServerErrors++;
-
+                nrr.addPortToSet(element.getPortWhichGaveAnswer());
+                nrr.setInputData(element.getInputData());
             }
+
+        if (numberOfServerErrors > 0) {
+            setOfNotRespondingOnTheRequest.add(nrr);
+        }
 
         int responseCode;
         if (numberOfSuccessAnswers >= replicas.getAck())
-            responseCode = codeOfMethod;
+            responseCode = positiveResponseToTheRequest;
         else if (numberOfServerErrors == 0)
             responseCode = NOT_FOUND;
         else
@@ -335,8 +400,8 @@ public class MyService implements KVService {
     private InnerRequestAnswer sendInnerRequest(@NotNull final String id, @NotNull final String port,
                                                 @NotNull final String typeOfRequest,
                                                 @Nullable byte[] inputDataForPut)  throws IOException {
-        URL url = new URL(port + "/v0/inner?id=" + id);
-        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+        final URL url = new URL(port + "/v0/inner?id=" + id);
+        final HttpURLConnection conn = (HttpURLConnection) url.openConnection();
 
         conn.setRequestMethod(typeOfRequest);
         conn.setDoOutput(true);
@@ -347,14 +412,14 @@ public class MyService implements KVService {
         try {
             switch (typeOfRequest) {
                 case GET_REQUEST :
-                    try (InputStream inputStream = conn.getInputStream()) {
+                    try (final InputStream inputStream = conn.getInputStream()) {
                         outputDataForGet = StreamReader.readDataFromStream(inputStream);
                     }
                     break;
 
                 case PUT_REQUEST :
                     if (inputDataForPut != null) {
-                        try (OutputStream outputStream = conn.getOutputStream()) {
+                        try (final OutputStream outputStream = conn.getOutputStream()) {
                             outputStream.write(inputDataForPut);
                         }
                     }
@@ -372,7 +437,7 @@ public class MyService implements KVService {
         }
         conn.disconnect();
 
-        return new InnerRequestAnswer(responseCode, outputDataForGet, port);
+        return new InnerRequestAnswer(responseCode, outputDataForGet, port, inputDataForPut);
     }
 
     private void requestMethodGet(@NotNull final HttpExchange http, @NotNull final String id) throws IOException {
@@ -392,7 +457,7 @@ public class MyService implements KVService {
     }
 
     private void requestMethodPut(@NotNull final HttpExchange http, @NotNull final String id) throws IOException {
-        try (InputStream requestStream = http.getRequestBody()) {
+        try (final InputStream requestStream = http.getRequestBody()) {
             dao.upsert(id, StreamReader.readDataFromStream(requestStream));
         }
         http.sendResponseHeaders(CREATED, 0);
@@ -401,14 +466,14 @@ public class MyService implements KVService {
     @NotNull
     private Replicas extractReplicas(@NotNull final String query) {
         if (!query.contains(REPLICAS_PREFIX)) {
-            int defaultValueOfAck = topology.size()/2 + 1;
-            int defaultValueOfFrom = topology.size();
+            final int defaultValueOfAck = topology.size()/2 + 1;
+            final int defaultValueOfFrom = topology.size();
             return new Replicas(defaultValueOfAck, defaultValueOfFrom);
         }
         if (!Pattern.matches("^(.)*" + REPLICAS_PREFIX + "([0-9])*" + SLASH + "([0-9])*$", query)) {
             throw new IllegalArgumentException("Wrong replicas");
         }
-        String partsOfReplicas[] = query.substring(
+        final String partsOfReplicas[] = query.substring(
                 query.indexOf(REPLICAS_PREFIX) + REPLICAS_PREFIX.length()).split(SLASH);
 
         return new Replicas(Integer.valueOf(partsOfReplicas[0]),Integer.valueOf(partsOfReplicas[1]));
@@ -429,9 +494,38 @@ public class MyService implements KVService {
         return query.substring(ID_PREFIX.length(), indexOfLastIDSymbol);
     }
 
+    private void sendRequestForRecovery(@NotNull final String node) {
+        try {
+            final URL url = new URL(node + "/v0/start");
+            final HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+
+            conn.setDoInput(true);
+
+            Set<NotRespondingOnTheRequest> setOfReceivedMissingCommands;
+
+            try (final ObjectInputStream ois = new ObjectInputStream(conn.getInputStream())) {
+                setOfReceivedMissingCommands = (Set<NotRespondingOnTheRequest>) ois.readObject();
+            }
+            if (!setOfReceivedMissingCommands.isEmpty()) {
+                for (NotRespondingOnTheRequest element : setOfReceivedMissingCommands) {
+                    if(element.getNotRespondingPorts().contains(address)) {
+                        sendInnerRequest(element.id, address,element.requestMethod, element.getInputData());
+                    }
+                }
+            }
+            conn.disconnect();
+
+        } catch (Exception ex) {
+            System.out.println("sendRequestForRecovery: "+ex);
+        }
+    }
+
     @Override
     public void start() {
         this.server.start();
+
+        for (String node : topology)
+            sendRequestForRecovery(node);
     }
 
     @Override
