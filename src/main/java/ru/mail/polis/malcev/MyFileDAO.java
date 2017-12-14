@@ -40,7 +40,7 @@ public class MyFileDAO implements MyDAO {
 
     @Override
     public void upsert(@NotNull final String key, @NotNull final byte[] value) throws IllegalArgumentException, IOException {
-        try(OutputStream os = new FileOutputStream(getFile(key))) {
+        try (OutputStream os = new FileOutputStream(getFile(key))) {
             os.write(value);
         }
     }

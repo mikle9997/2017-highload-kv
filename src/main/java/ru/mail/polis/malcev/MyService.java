@@ -123,18 +123,11 @@ public class MyService implements KVService {
     public MyService(final int port, @NotNull final Set<String> topology, @NotNull MyDAO dao) throws IOException {
         this.server = HttpServer.create(new InetSocketAddress(port), 0);
         this.dao = dao;
-        this.topology = sortSet(topology);
+        this.topology = new TreeSet<>(topology);
 
         createContextStatus();
         createContextEntity();
         createContextInner();
-    }
-
-    @NotNull
-    private static Set<String> sortSet(@NotNull final Set<String> unsortedSet) {
-        final Set<String> sortedSet = new TreeSet<>(String::compareTo);
-        sortedSet.addAll(unsortedSet);
-        return sortedSet;
     }
 
     private void createContextStatus(){
@@ -182,9 +175,12 @@ public class MyService implements KVService {
                                 http.sendResponseHeaders(responseCode, 0);
                                 if (responseCode == OK) {
                                     byte[] outputValue = new byte[0];
-                                    for (InnerRequestAnswer element : listIRA)
-                                        if (element.getOutputData().length != 0)
+                                    for (InnerRequestAnswer element : listIRA) {
+                                        if (element.getOutputData().length != 0) {
                                             outputValue = element.getOutputData();
+                                            break;
+                                        }
+                                    }
                                     http.getResponseBody().write(outputValue);
                                 }
                                 break;
@@ -221,8 +217,9 @@ public class MyService implements KVService {
     private int processingRequestAnswers(@NotNull final List<InnerRequestAnswer> listIRA,
                                          @NotNull final Replicas replicas, @NotNull final String nameOfMethod,
                                          @NotNull final String id) {
-        if (listIRA.size() == 0)
+        if (listIRA.size() == 0) {
             return GATEWAY_TIMEOUT;
+        }
 
         int numberOfSuccessAnswers = 0;
         int numberOfServerErrors = 0;
@@ -247,19 +244,23 @@ public class MyService implements KVService {
         }
 
         for (InnerRequestAnswer element : listIRA)
-            if (element.getResponseCode() == positiveResponseToTheRequest)
+            if (element.getResponseCode() == positiveResponseToTheRequest) {
                 numberOfSuccessAnswers++;
+            }
             else if (element.getResponseCode() == GATEWAY_TIMEOUT) {
                 numberOfServerErrors++;
             }
 
         int responseCode;
-        if (numberOfSuccessAnswers >= replicas.getAck())
+        if (numberOfSuccessAnswers >= replicas.getAck()) {
             responseCode = positiveResponseToTheRequest;
-        else if (numberOfServerErrors == 0)
+        }
+        else if (numberOfServerErrors == 0) {
             responseCode = NOT_FOUND;
-        else
+        }
+        else {
             responseCode = GATEWAY_TIMEOUT;
+        }
 
         return responseCode;
     }
@@ -338,7 +339,7 @@ public class MyService implements KVService {
         try {
             responseCode = conn.getResponseCode();
         } catch (IOException ex) {
-            //do nothing
+            System.out.println(ex);
         }
         conn.disconnect();
 

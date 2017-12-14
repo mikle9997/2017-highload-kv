@@ -17,7 +17,7 @@ public class StreamReader {
         try (final ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
             int numberOfBytesRead;
             while ((numberOfBytesRead = in.read(buffer)) != -1) {
-                baos.write(buffer,0, numberOfBytesRead);
+                baos.write(buffer, 0, numberOfBytesRead);
             }
             baos.flush();
             return baos.toByteArray();
