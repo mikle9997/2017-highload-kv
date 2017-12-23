@@ -221,8 +221,8 @@ public class MyService implements KVService {
             return GATEWAY_TIMEOUT;
         }
 
-        int numberOfSuccessAnswers = 0;
-        int numberOfServerErrors = 0;
+        int numberOfPositiveAnswers = 0;
+        int numberOfNegativeAnswers = 0;
 
         int positiveResponseToTheRequest;
         switch (nameOfMethod) {
@@ -245,20 +245,20 @@ public class MyService implements KVService {
 
         for (InnerRequestAnswer element : listIRA)
             if (element.getResponseCode() == positiveResponseToTheRequest) {
-                numberOfSuccessAnswers++;
+                numberOfPositiveAnswers++;
             }
-            else if (element.getResponseCode() == GATEWAY_TIMEOUT) {
-                numberOfServerErrors++;
+            else if (element.getResponseCode() == NOT_FOUND) {
+                numberOfNegativeAnswers++;
             }
 
         int responseCode;
-        if (numberOfSuccessAnswers >= replicas.getAck()) {
-            responseCode = positiveResponseToTheRequest;
-        }
-        else if (numberOfServerErrors == 0) {
-            responseCode = NOT_FOUND;
-        }
-        else {
+        if (numberOfPositiveAnswers + numberOfNegativeAnswers >= replicas.getAck()) {
+            if (numberOfPositiveAnswers > 0) {
+                responseCode = positiveResponseToTheRequest;
+            } else {
+                responseCode = NOT_FOUND;
+            }
+        } else {
             responseCode = GATEWAY_TIMEOUT;
         }
 
